@@ -1,4 +1,5 @@
 import os 
+import requests
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from langchain_openai import OpenAI
@@ -7,7 +8,10 @@ from langchain.chains.conversation.memory import ConversationBufferWindowMemory
 from langchain.chains import LLMChain
 from dotenv import load_dotenv
 from langchain.prompts import PromptTemplate
+from whisper import load_model
 
+
+whisper_model = load_model("base")
 
 load_dotenv()
 
@@ -38,6 +42,44 @@ chatgpt_chain = LLMChain(
     verbose=True,
     memory=ConversationBufferWindowMemory(k=2)
 )
+
+@app.event("file_shared")
+def handle_file_shared(event, client, logger):
+    try:
+        file_id = event.get("file_id")
+        result = client.files_info(file=file_id)
+        file_info = result.get("file", {})
+        file_url_private = file_info.get("url_private_download")
+
+        headers = {"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"}
+        response = requests.get(file_url_private, headers=headers, stream=True)
+
+        if response.status_code == 200:
+            video_path = 'downloaded_video.mp4'
+            with open(video_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+            # Extract audio from video using ffmpeg
+            audio_path = 'audio.wav'
+            os.system(f"ffmpeg -i {video_path} -acodec pcm_s16le -ar 16000 {audio_path}")
+
+            # Transcribe audio using Whisper
+            result = whisper_model.transcribe(audio_path)
+            transcription = result["text"]
+           
+            # Post the transcription back into the Slack channel
+            channel_id = event.get("channel_id")  # Extract channel_id from the event
+            client.chat_postMessage(channel=channel_id, text=transcription)
+
+        else:
+            logger.error(f"Failed to download video file. Status code: {response.status_code}")
+
+    except Exception as e:
+        logger.error(f"Error handling file_shared event: {e}")
+
+
+
 
 
 @app.message(".*")
