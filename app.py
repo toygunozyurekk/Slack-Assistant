@@ -46,6 +46,7 @@ chatgpt_chain = LLMChain(
 @app.event("file_shared")
 def handle_file_shared(event, client, logger):
     try:
+        # Initial setup remains the same, you download the shared file
         file_id = event.get("file_id")
         result = client.files_info(file=file_id)
         file_info = result.get("file", {})
@@ -60,17 +61,19 @@ def handle_file_shared(event, client, logger):
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
 
-            # Extract audio from video using ffmpeg
+            # Extract audio and transcribe it
             audio_path = 'audio.wav'
-            os.system(f"ffmpeg -i {video_path} -acodec pcm_s16le -ar 16000 {audio_path}")
+            os.system(f"ffmpeg -y -i {video_path} -acodec pcm_s16le -ar 16000 {audio_path}")
 
-            # Transcribe audio using Whisper
             result = whisper_model.transcribe(audio_path)
             transcription = result["text"]
-           
-            # Post the transcription back into the Slack channel
-            channel_id = event.get("channel_id")  # Extract channel_id from the event
-            client.chat_postMessage(channel=channel_id, text=transcription)
+
+            # Here's the new part: Generate an OpenAI response using the transcription
+            output = chatgpt_chain.predict(human_input=transcription)
+            
+            # Post the OpenAI-generated response instead of the transcription
+            channel_id = event.get("channel_id")
+            client.chat_postMessage(channel=channel_id, text=output)
 
         else:
             logger.error(f"Failed to download video file. Status code: {response.status_code}")
